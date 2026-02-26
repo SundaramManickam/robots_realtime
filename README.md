@@ -5,6 +5,7 @@ Robots Realtime is a research codebase supporting modular software stacks for re
 It provides extensible pythonic infrastructure for low-latency joint command streaming, agent-based policy control, visualization, and integration with inverse kinematics solvers like [pyroki](https://github.com/chungmin99/pyroki) developed by [Chung-Min Kim](https://chungmin99.github.io/)! 
 
 Examples:
+
 <img src="media/yam_realtime.gif" width="500">
 <img src="media/franka_realtime2.gif" width="500">
 <img src="media/yam_active_leader.gif" width="500">
