@@ -43,9 +43,9 @@ For Franka Panda (with default panda gripper):
 uv sync --extra sensors --extra franka_panda
 uv run robots_realtime/envs/launch.py --config_path configs/franka/franka_viser_osc.yaml
 ```
-or for robotiq gripper (ensure flange orientation is correct):
+or for robotiq gripper instead of default panda grippers (ensure flange orientation is correct):
 ```bash
-uv run robots_realtime/envs/launch.py --config_path configs/franka/franka_robotiq_client.yaml
+uv run robots_realtime/envs/launch.py --config_path configs/franka/franka_robotiq_viser.yaml
 ```
 
 ## Extending with Custom Agents
