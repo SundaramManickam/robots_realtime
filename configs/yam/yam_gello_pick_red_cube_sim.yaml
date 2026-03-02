@@ -5,9 +5,7 @@
 #
 #
 # Usage (macOS requires mjpython for the passive viewer):
-#   DYLD_LIBRARY_PATH=~/.local/share/uv/python/cpython-3.11.14-macos-aarch64-none/lib \
-#     .venv/bin/mjpython robots_realtime/envs/launch.py \
-#       --config-path configs/yam/yam_gello_pick_red_cube_sim.yaml
+#   DYLD_LIBRARY_PATH=~/.local/share/uv/python/cpython-3.11.14-macos-aarch64-none/lib .venv/bin/mjpython robots_realtime/envs/launch.py --config-path configs/yam/yam_gello_pick_red_cube_sim.yaml
 #
 # Or headless (render: false):
 #   uv run python robots_realtime/envs/launch.py \
