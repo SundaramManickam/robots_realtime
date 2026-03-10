@@ -1,0 +1,26 @@
+# YAM Pick Red Cube MuJoCo Simulation driven by browser-based Viser IK agent.
+#
+# No physical leader device required. Control the arm by dragging a 3D
+# end-effector handle in the Viser browser UI (http://localhost:8080).
+#
+# Usage:
+#   uv run python robots_realtime/envs/launch.py \
+#       --config-path configs/yam/yam_viser_pick_red_cube_sim.yaml
+
+_target_: robots_realtime.envs.launch.LaunchConfig
+sim_mode: true
+hz: 50.0
+
+robots:
+  left:
+    _target_: robots_realtime.robots.yam_pick_red_cube_sim_robot.YamPickRedCubeSimRobot
+    station_key: "SIM_YAM"
+    right_arm_only: true
+    render: true
+    randomize_scene: false
+    control_dt: 0.02
+    camera_obs: false
+
+agent:
+  _target_: robots_realtime.agents.teleoperation.yam_pyroki_viser_agent.YamPyrokiViserAgent
+  bimanual: false

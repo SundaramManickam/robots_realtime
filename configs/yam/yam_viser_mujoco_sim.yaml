@@ -1,0 +1,25 @@
+# YAM MuJoCo Simulation driven by browser-based Viser IK agent.
+#
+# No physical leader device required. Control the arm by dragging a 3D
+# end-effector handle in the Viser browser UI (http://localhost:8080).
+#
+# Usage:
+#   uv run python robots_realtime/envs/launch.py \
+#       --config-path configs/yam/yam_viser_mujoco_sim.yaml
+#
+# Then open http://localhost:8080 in your browser (or on a device on the same
+# network) and drag the green IK target handle to move the simulated arm.
+
+_target_: robots_realtime.envs.launch.LaunchConfig
+sim_mode: true
+hz: 50.0
+
+robots:
+  left:
+    _target_: robots_realtime.robots.mujoco_sim_robot.MujocoSimRobot
+    xml_path: "dependencies/i2rt/i2rt/robot_models/yam/yam.xml"
+    render: true
+
+agent:
+  _target_: robots_realtime.agents.teleoperation.yam_pyroki_viser_agent.YamPyrokiViserAgent
+  bimanual: false

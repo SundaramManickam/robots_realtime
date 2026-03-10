@@ -1,0 +1,51 @@
+# YAM Pick Red Cube MuJoCo Simulation driven by Quest 3 / 3S VR controllers.
+#
+# Bimanual setup: left Quest controller drives left arm, right drives right.
+# Hold trigger to engage teleoperation. A=close gripper, B=open gripper.
+#
+# ── Prerequisites ──────────────────────────────────────────────────────
+#
+#   Install the quest_vr optional dependency:
+#     source .venv/bin/activate && uv pip install vuer
+#
+#   WebXR requires HTTPS. Start an ngrok tunnel:
+#     ngrok http 8012
+#
+#   Then open the ngrok HTTPS URL in the Quest browser.
+#
+# ── Usage ──────────────────────────────────────────────────────────────
+#
+#   uv run python robots_realtime/envs/launch.py \
+#       --config-path configs/yam/yam_quest_pick_red_cube_sim.yaml
+#
+
+_target_: robots_realtime.envs.launch.LaunchConfig
+sim_mode: true
+hz: 50.0
+
+robots:
+  bimanual:
+    _target_: robots_realtime.robots.yam_pick_red_cube_sim_robot.YamPickRedCubeSimRobot
+    station_key: "SIM_YAM"
+    right_arm_only: false
+    render: true
+    randomize_scene: false
+    control_dt: 0.02
+    camera_obs: true
+
+agent:
+  _target_: robots_realtime.agents.teleoperation.quest_vr_agent.QuestVRAgent
+  bimanual: true
+  bimanual_combined_key: "bimanual"
+  vuer_port: 8012
+  position_scale: 1.0
+  smoothing_omega: 12.0
+  smoothing_alpha: 0.3
+  max_joint_vel: 2.0
+  danger_zone_margin: 0.10
+  deadzone_m: 0.002
+  track_orientation: true
+  stream_camera: true
+  camera_key: "top_camera"
+  stream_fps: 30.0
+  stream_quality: 80

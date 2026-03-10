@@ -352,7 +352,7 @@ class YamEnvCabinateMug(YamEnv):
 class YamEnvPickRedCube(YamEnv):
     def _add_others(self, station_spec):
         # Add a red cube to the station
-        size = 0.015
+        size = 0.025
         cube_spawn_site = station_spec.worldbody.add_site(pos=[0.6, -0.3, 0.753 + size])
         cube_spec = mujoco.MjSpec()
         body = cube_spec.worldbody.add_body(name="cube_body")

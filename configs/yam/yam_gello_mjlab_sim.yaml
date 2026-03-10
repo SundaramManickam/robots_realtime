@@ -44,7 +44,7 @@ robots:
     _target_: robots_realtime.robots.mjlab_sim_robot.MjlabSimRobot
     task_id: "Mjlab-Lift-Cube-Yam"
     num_envs: 1
-    device: "cpu"         # Use "cuda:0" on Linux with a CUDA-capable GPU
+    device: "cuda:0"      # RTX 4060 detected; switch back to "cpu" if issues arise
     render: true          # Set false for headless / non-mjpython launch
     num_arm_dofs: 6
     include_gripper: true
@@ -53,7 +53,7 @@ robots:
 
 agent:
   _target_: robots_realtime.agents.teleoperation.gello_leader_agent.GelloLeaderAgent
-  port: "/dev/tty.usbmodem5AE60805531"
+  port: "/dev/ttyUSB0"  # TODO: verify with `lerobot-find-port` and update if different
   robot_name: "yam"
   calibrate: true
   drive_to_zero: true

@@ -114,16 +114,24 @@ class YamPickRedCubeSimRobot(Robot):
         right = obs["right"]
         right_pos = np.concatenate([right["joint_pos"], right["gripper_pos"]]).astype(np.float32)
         if self._right_arm_only:
-            return {
+            result: Dict = {
                 "joint_pos": right_pos,
                 "joint_vel": right["joint_vel"].astype(np.float32),
             }
-        left = obs["left"]
-        left_pos = np.concatenate([left["joint_pos"], left["gripper_pos"]]).astype(np.float32)
-        return {
-            "joint_pos": np.concatenate([left_pos, right_pos]),
-            "joint_vel": np.concatenate([left["joint_vel"], right["joint_vel"]]).astype(np.float32),
-        }
+        else:
+            left = obs["left"]
+            left_pos = np.concatenate([left["joint_pos"], left["gripper_pos"]]).astype(np.float32)
+            result = {
+                "joint_pos": np.concatenate([left_pos, right_pos]),
+                "joint_vel": np.concatenate([left["joint_vel"], right["joint_vel"]]).astype(np.float32),
+            }
+
+        # Forward camera observations from the underlying environment
+        for cam_key in ("top_camera", "left_camera", "right_camera"):
+            if cam_key in obs:
+                result[cam_key] = obs[cam_key]
+
+        return result
 
     # ------------------------------------------------------------------ #
     # Viewer helpers

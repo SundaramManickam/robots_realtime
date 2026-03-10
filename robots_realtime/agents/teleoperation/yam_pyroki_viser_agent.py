@@ -67,10 +67,13 @@ class YamPyrokiViserAgent(Agent):
     def _update_visualization(self):
         while self.obs is None:
             time.sleep(0.025)
+        n_urdf_joints = len(self.ik.urdf.actuated_joints)
         while True:
             if self.bimanual:
-                self.urdf_vis_right_real.update_cfg(np.flip(self.obs["right"]["joint_pos"]))
-            self.urdf_vis_left_real.update_cfg(np.flip(self.obs["left"]["joint_pos"]))
+                right_pos = self.obs["right"]["joint_pos"][:n_urdf_joints]
+                self.urdf_vis_right_real.update_cfg(np.flip(right_pos))
+            left_pos = self.obs["left"]["joint_pos"][:n_urdf_joints]
+            self.urdf_vis_left_real.update_cfg(np.flip(left_pos))
 
             # Extract RGB images from observation (if any)
             rgb_images = obs_get_rgb(self.obs)

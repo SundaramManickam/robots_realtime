@@ -46,6 +46,9 @@ franka_panda = [
 mjlab_sim = [
     "mjlab",
 ]
+quest_vr = [
+    "vuer",
+]
 
 [tool.uv.sources]
 pyroki = { path = "dependencies/pyroki", editable = true }
@@ -53,7 +56,7 @@ jaxls = { path = "dependencies/jaxls", editable = true }
 panda_python = { path = "dependencies/panda_py_0.7.5_libfranka_0.10.0/panda_python-0.7.5+libfranka.0.10.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 pyzed = { path = "dependencies/pyzed-5.1-cp311-cp311-linux_x86_64.whl" }
 i2rt = { path = "dependencies/i2rt", editable = true }
-lerobot_teleoperator_yamactiveleader = { path = "dependencies/lerobot_teleoperator_yamactiveleader", editable = true }
+lerobot_teleoperator_yamactiveleader = { git = "https://github.com/uynitsuj/lerobot_teleoperator_yamactiveleader.git" }
 mjlab = { path = "dependencies/mjlab", editable = true }
 
 [tool.uv]
