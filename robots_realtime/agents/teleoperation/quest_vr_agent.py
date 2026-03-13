@@ -14,9 +14,10 @@ Requirements:
   - Quest browser navigating to the HTTPS tunnel URL
 
 Button mapping (Quest Touch controllers):
-  - A button (right) / X button (left): close gripper
-  - B button (right) / Y button (left): open gripper
   - Trigger: engage teleoperation (controller pose drives the arm)
+  - Grip (squeeze): close gripper while held, open on release
+  - A button (right) / X button (left): reset BOTH arms to home position
+  - B button (right) / Y button (left): open gripper
 """
 
 import asyncio
@@ -52,8 +53,8 @@ _YAM_JOINT_LIMITS: List[Tuple[float, float]] = [
     (-2.0944, 2.0944),  # joint6
 ]
 
-_DANGER_ZONE_RAD = 0.15
-_MAX_JOINT_VEL_RAD_PER_S = 1.5
+_DANGER_ZONE_RAD = 0.05
+_MAX_JOINT_VEL_RAD_PER_S = 0.5
 _GRIPPER_OPEN = 0.0
 _GRIPPER_CLOSED = 2.4
 
@@ -179,14 +180,39 @@ class _CriticallyDampedFilter:
 
 
 def _deadzone(delta: np.ndarray, threshold: float) -> np.ndarray:
-    """Zero out deltas smaller than *threshold* (Euclidean norm).
+    """Smooth deadzone filter with ramped re-entry.
 
-    Filters micro-tremors from the user's hand so the robot stays
-    rock-steady when the user intends to hold still.
+    Instead of a hard cutoff (which causes snapping), this subtracts the
+    threshold from the magnitude while preserving direction.  The result
+    is a smooth ramp from zero at ``threshold`` to full scale above it.
     """
-    if np.linalg.norm(delta) < threshold:
+    norm = np.linalg.norm(delta)
+    if norm < threshold:
         return np.zeros_like(delta)
-    return delta
+    # Subtract threshold from magnitude, keep direction
+    return delta * ((norm - threshold) / norm)
+
+
+def _slerp_wxyz(q1: np.ndarray, q2: np.ndarray, alpha: float) -> np.ndarray:
+    """Spherical linear interpolation for wxyz quaternions.
+
+    Produces constant-angular-velocity rotation interpolation — much
+    smoother than naive EMA which distorts angular speed near the poles.
+    ``alpha`` of 0 returns *q1*, 1 returns *q2*.
+    """
+    dot = np.dot(q1, q2)
+    if dot < 0:
+        q2 = -q2
+        dot = -dot
+    # Fall back to normalised LERP for nearly-identical quaternions
+    if dot > 0.9995:
+        result = q1 + alpha * (q2 - q1)
+        return result / np.linalg.norm(result)
+    theta = np.arccos(np.clip(dot, -1.0, 1.0))
+    sin_theta = np.sin(theta)
+    w1 = np.sin((1.0 - alpha) * theta) / sin_theta
+    w2 = np.sin(alpha * theta) / sin_theta
+    return w1 * q1 + w2 * q2
 
 
 def _clamp_to_limits(
@@ -228,15 +254,20 @@ def _solve_ik_teleop(
     target_wxyz: jax.Array,
     target_position: jax.Array,
     prev_cfg: jax.Array,
+    pos_weight: jax.Array,
+    ori_weight: jax.Array,
+    rest_weight: jax.Array,
 ) -> jax.Array:
     """IK solver tuned for teleoperation.
 
     Combines three objectives:
-    - **Pose**: reach the desired position (weight 50) and orientation (weight 5).
+    - **Pose**: reach the desired position and orientation.
     - **Regularization**: light bias toward the previous configuration to
-      discourage unnecessary branch-jumping (weight 0.3 -- low enough to
-      allow full elbow bending).
+      discourage unnecessary branch-jumping.
     - **Joint limits**: hard constraint to respect actuator range.
+
+    Weights are passed as JAX arrays so they can be tuned from config
+    without recompilation (traced values).
     """
     joint_var = robot.joint_var_cls(0)
     costs = [
@@ -247,10 +278,10 @@ def _solve_ik_teleop(
                 jaxlie.SO3(target_wxyz), target_position
             ),
             target_link_index,
-            pos_weight=50.0,
-            ori_weight=5.0,
+            pos_weight=pos_weight,
+            ori_weight=ori_weight,
         ),
-        pk.costs.rest_cost(joint_var, rest_pose=prev_cfg, weight=0.3),
+        pk.costs.rest_cost(joint_var, rest_pose=prev_cfg, weight=rest_weight),
         pk.costs.limit_constraint(robot, joint_var),
     ]
     sol = (
@@ -294,13 +325,31 @@ class QuestVRAgent(Agent):
         bimanual_combined_key: Optional[str] = None,
         vuer_port: int = 8012,
         position_scale: float = 1.0,
-        smoothing_omega: float = 12.0,
-        smoothing_alpha: float = 0.3,
+        smoothing_omega: float = 8.0,
+        smoothing_alpha: float = 0.4,
         max_joint_vel: float = _MAX_JOINT_VEL_RAD_PER_S,
         danger_zone_margin: float = _DANGER_ZONE_RAD,
-        deadzone_m: float = 0.002,
+        deadzone_m: float = 0.004,
         track_orientation: bool = False,
         default_orientation_wxyz: Optional[List[float]] = None,
+        # IK solver weights
+        ik_pos_weight: float = 50.0,
+        ik_ori_weight: float = 20.0,
+        ik_rest_weight: float = 0.1,
+        # Workspace clamp: max distance (m) from robot base the EE target
+        # is allowed to reach.  Prevents impossible IK targets that cause
+        # erratic joint solutions.  Set to None to disable.
+        workspace_radius: float = 0.28,
+        # Home position (6 joint angles); None → all zeros
+        home_joints: Optional[List[float]] = None,
+        # Velocity used when returning to home (rad/s) — slower than teleop
+        home_vel: float = 0.8,
+        # Diagnostic mode: prints coordinate mapping info to terminal
+        debug_mapping: bool = False,
+        # Effort-based collision detection
+        effort_limit: Optional[float] = None,
+        effort_obs_key: str = "joint_efforts",
+        # Camera streaming
         stream_camera: bool = False,
         camera_key: Optional[str] = None,
         stream_fps: float = 30.0,
@@ -318,6 +367,31 @@ class QuestVRAgent(Agent):
         self.danger_zone_margin = danger_zone_margin
         self._deadzone_m = deadzone_m
         self._track_orientation = track_orientation
+
+        # IK weights
+        self._ik_pos_weight = jnp.array(ik_pos_weight, dtype=jnp.float32)
+        self._ik_ori_weight = jnp.array(ik_ori_weight, dtype=jnp.float32)
+        self._ik_rest_weight = jnp.array(ik_rest_weight, dtype=jnp.float32)
+
+        # Workspace clamp
+        self._workspace_radius = workspace_radius
+
+        # Home position for reset
+        if home_joints is not None:
+            self._home_joints = np.array(home_joints, dtype=np.float64)
+        else:
+            self._home_joints = np.zeros(6, dtype=np.float64)
+        self._home_vel = home_vel
+        self._homing = False  # True while returning to home
+        self._debug_mapping = debug_mapping
+        self._debug_counter = 0  # throttle debug prints
+        self._debug_anchor_raw = np.zeros(3)  # WebXR anchor for delta display
+
+        # Effort-based collision detection: if motor effort exceeds this
+        # threshold, freeze motion to avoid pushing against obstacles.
+        self._effort_limit = effort_limit
+        self._effort_obs_key = effort_obs_key
+        self._effort_blocked: Dict[str, bool] = {}
 
         # Camera streaming config
         self._stream_camera = stream_camera
@@ -355,6 +429,7 @@ class QuestVRAgent(Agent):
             s: _CriticallyDampedFilter(omega=smoothing_omega, dim=3) for s in sides
         }
         self._smoothed_target_wxyz: Dict[str, Optional[np.ndarray]] = {s: None for s in sides}
+        self._effort_blocked = {s: False for s in sides}
         self._last_act_time = time.time()
 
         # Delta-control anchors: set when trigger is first pressed
@@ -376,6 +451,9 @@ class QuestVRAgent(Agent):
             jnp.array(self._default_wxyz, dtype=jnp.float32),
             jnp.array([0.1, 0.0, 0.15], dtype=jnp.float32),
             jnp.zeros(self._n_joints, dtype=jnp.float32),
+            self._ik_pos_weight,
+            self._ik_ori_weight,
+            self._ik_rest_weight,
         )
 
         # Start Vuer server in background thread
@@ -456,6 +534,41 @@ class QuestVRAgent(Agent):
     # Agent protocol
     # ------------------------------------------------------------------ #
 
+    def _check_effort(self, obs: Dict[str, Any], side: str) -> bool:
+        """Return True if motion should be blocked due to excessive effort.
+
+        Reads motor effort/current from observations. If any joint exceeds
+        ``effort_limit``, the arm is blocked until effort drops below 80% of
+        the threshold (hysteresis prevents chattering).
+        """
+        if self._effort_limit is None:
+            return False
+
+        # Try to find effort data for this arm in observations
+        arm_obs = obs.get(side, {})
+        if not isinstance(arm_obs, dict):
+            return False
+        efforts = arm_obs.get(self._effort_obs_key)
+        if efforts is None:
+            return False
+
+        efforts = np.asarray(efforts)
+        max_effort = np.max(np.abs(efforts))
+
+        if self._effort_blocked[side]:
+            # Hysteresis: unblock at 80% of limit
+            if max_effort < self._effort_limit * 0.8:
+                self._effort_blocked[side] = False
+                logger.info("%s arm: effort dropped below threshold, resuming", side)
+        elif max_effort > self._effort_limit:
+                self._effort_blocked[side] = True
+                logger.warning(
+                    "%s arm: effort %.2f exceeds limit %.2f — freezing motion",
+                    side, max_effort, self._effort_limit,
+                )
+
+        return self._effort_blocked[side]
+
     def act(self, obs: Dict[str, Any]) -> Any:
         now = time.time()
         dt = now - self._last_act_time
@@ -465,6 +578,59 @@ class QuestVRAgent(Agent):
             ctrl = dict(self._ctrl_state)
 
         action: Dict[str, Dict[str, np.ndarray]] = {}
+
+        # Check if A (right) or X (left) was pressed on ANY controller → home ALL arms
+        for side in self._sides:
+            state_key = f"{side}State"
+            buttons = ctrl.get(state_key, {})
+            if buttons.get("aButton", False) or buttons.get("xButton", False):
+                if not self._homing:
+                    self._homing = True
+                    # Clear all teleop anchors so trigger must be re-engaged
+                    for s in self._sides:
+                        self._anchor_ctrl_pos[s] = None
+                        self._anchor_ee_pos[s] = None
+                        self._anchor_ctrl_wxyz[s] = None
+                        self._anchor_ee_wxyz[s] = None
+                        self._smoothed_target_wxyz[s] = None
+                    logger.info("Home reset triggered — returning all arms to home position")
+                break
+
+        # If homing, smoothly move all arms toward home and skip teleop
+        if self._homing:
+            all_home = True
+            for side in self._sides:
+                homed = _limit_joint_velocity(
+                    self._home_joints, self._joints[side], dt, self._home_vel,
+                )
+                self._joints[side] = homed
+                if np.max(np.abs(homed - self._home_joints)) > 0.01:
+                    all_home = False
+
+                # Read gripper from grip button even during homing
+                state_key = f"{side}State"
+                buttons = ctrl.get(state_key, {})
+                grip_pressed = bool(buttons.get("squeeze", False) or buttons.get("grip", False))
+                if grip_pressed:
+                    self._gripper[side] = _GRIPPER_CLOSED
+                else:
+                    self._gripper[side] = _GRIPPER_OPEN
+
+                action[side] = {
+                    "pos": np.concatenate([
+                        np.flip(self._joints[side]),
+                        [self._gripper[side]],
+                    ]).astype(np.float32),
+                }
+
+            if all_home:
+                self._homing = False
+                logger.info("All arms reached home position")
+
+            # Still do camera streaming during homing
+            self._stream_camera_frame(obs)
+
+            return self._maybe_combine_bimanual(action)
 
         for side in self._sides:
             ctrl_key = side                 # "left" or "right"
@@ -496,55 +662,88 @@ class QuestVRAgent(Agent):
                         "%s trigger pressed — anchor EE at %s",
                         side, self._anchor_ee_pos[side],
                     )
+                    if self._debug_mapping:
+                        print(f"\n[DEBUG] {side} ANCHOR SET", flush=True)
+                        print(f"  WebXR raw pos : x={raw_pos[0]:+.4f}  y={raw_pos[1]:+.4f}  z={raw_pos[2]:+.4f}", flush=True)
+                        print(f"  Robot frame   : x={ctrl_pos_robot[0]:+.4f}  y={ctrl_pos_robot[1]:+.4f}  z={ctrl_pos_robot[2]:+.4f}", flush=True)
+                        print(f"  EE position   : {ee_pos}", flush=True)
+                        print(f"  Current joints: {self._joints[side]}", flush=True)
+                        self._debug_anchor_raw = raw_pos.copy()
 
                 if trigger_pressed and self._anchor_ctrl_pos[side] is not None:
-                    raw_delta = (ctrl_pos_robot - self._anchor_ctrl_pos[side]) * self.position_scale
-                    delta = _deadzone(raw_delta, self._deadzone_m)
-                    target_pos = self._anchor_ee_pos[side] + delta
+                    # Check effort-based collision before computing new targets
+                    if self._check_effort(obs, side):
+                        # Effort exceeded — hold current joints, skip IK
+                        pass
+                    else:
+                        raw_delta = (ctrl_pos_robot - self._anchor_ctrl_pos[side]) * self.position_scale
+                        delta = _deadzone(raw_delta, self._deadzone_m)
+                        target_pos = self._anchor_ee_pos[side] + delta
 
-                    ik_pos = self._pos_filter[side].step(target_pos, dt)
-                    ik_wxyz = self._default_wxyz
+                        # Clamp target to reachable workspace sphere so
+                        # the IK solver never gets an impossible target
+                        # (which causes erratic joint configurations).
+                        if self._workspace_radius is not None:
+                            dist = np.linalg.norm(target_pos)
+                            if dist > self._workspace_radius:
+                                target_pos = target_pos * (self._workspace_radius / dist)
 
-                    if self._track_orientation and self._anchor_ctrl_wxyz[side] is not None:
-                        delta_q = _quat_mul_wxyz(
-                            ctrl_wxyz_robot,
-                            _quat_conj_wxyz(self._anchor_ctrl_wxyz[side]),
-                        )
-                        delta_q = np.array(delta_q)
-                        delta_q[2] = -delta_q[2]
-                        target_wxyz = _quat_mul_wxyz(delta_q, self._anchor_ee_wxyz[side])
-                        target_wxyz /= np.linalg.norm(target_wxyz)
+                        # Debug: print mapping every ~1s (every 50 frames at 50Hz)
+                        if self._debug_mapping:
+                            self._debug_counter += 1
+                            if self._debug_counter % 50 == 0:
+                                webxr_delta = raw_pos - self._debug_anchor_raw
+                                print(f"\n[DEBUG] {side} MAPPING (every 1s)", flush=True)
+                                print(f"  WebXR delta (raw): x={webxr_delta[0]:+.4f}  y={webxr_delta[1]:+.4f}  z={webxr_delta[2]:+.4f}", flush=True)
+                                print(f"  Robot delta      : x={delta[0]:+.4f}  y={delta[1]:+.4f}  z={delta[2]:+.4f}", flush=True)
+                                print(f"  IK target pos    : {target_pos}", flush=True)
+                                ee_now = self._compute_ee_position(self._joints[side])
+                                print(f"  Actual EE pos    : {ee_now}", flush=True)
+                                print(f"  Joints (rad)     : {np.round(self._joints[side], 3)}", flush=True)
 
-                        a = self.smoothing_alpha
-                        if np.dot(target_wxyz, self._smoothed_target_wxyz[side]) < 0:
-                            target_wxyz = -target_wxyz
-                        self._smoothed_target_wxyz[side] = (
-                            a * target_wxyz + (1 - a) * self._smoothed_target_wxyz[side]
-                        )
-                        norm = np.linalg.norm(self._smoothed_target_wxyz[side])
-                        if norm > 0:
-                            self._smoothed_target_wxyz[side] /= norm
-                        ik_wxyz = self._smoothed_target_wxyz[side]
+                        ik_pos = self._pos_filter[side].step(target_pos, dt)
+                        ik_wxyz = self._default_wxyz
 
-                    try:
-                        raw_joints = np.array(_solve_ik_teleop(
-                            self._pk_robot,
-                            jnp.array(self._target_link_index),
-                            jnp.array(ik_wxyz, dtype=jnp.float32),
-                            jnp.array(ik_pos, dtype=jnp.float32),
-                            jnp.array(self._joints[side], dtype=jnp.float32),
-                        ))
-                        raw_joints = _clamp_to_limits(
-                            raw_joints, _YAM_JOINT_LIMITS, self.danger_zone_margin,
-                        )
-                        raw_joints = _limit_joint_velocity(
-                            raw_joints, self._joints[side], dt, self.max_joint_vel,
-                        )
-                        self._joints[side] = raw_joints
-                    except Exception:
-                        logger.warning(
-                            "IK solve failed for %s arm, holding previous joints", side,
-                        )
+                        if self._track_orientation and self._anchor_ctrl_wxyz[side] is not None:
+                            delta_q = _quat_mul_wxyz(
+                                ctrl_wxyz_robot,
+                                _quat_conj_wxyz(self._anchor_ctrl_wxyz[side]),
+                            )
+                            delta_q = np.array(delta_q)
+                            delta_q[2] = -delta_q[2]
+                            target_wxyz = _quat_mul_wxyz(delta_q, self._anchor_ee_wxyz[side])
+                            target_wxyz /= np.linalg.norm(target_wxyz)
+
+                            # SLERP for smooth, constant-velocity rotation interpolation
+                            self._smoothed_target_wxyz[side] = _slerp_wxyz(
+                                self._smoothed_target_wxyz[side],
+                                target_wxyz,
+                                self.smoothing_alpha,
+                            )
+                            ik_wxyz = self._smoothed_target_wxyz[side]
+
+                        try:
+                            raw_joints = np.array(_solve_ik_teleop(
+                                self._pk_robot,
+                                jnp.array(self._target_link_index),
+                                jnp.array(ik_wxyz, dtype=jnp.float32),
+                                jnp.array(ik_pos, dtype=jnp.float32),
+                                jnp.array(self._joints[side], dtype=jnp.float32),
+                                self._ik_pos_weight,
+                                self._ik_ori_weight,
+                                self._ik_rest_weight,
+                            ))
+                            raw_joints = _clamp_to_limits(
+                                raw_joints, _YAM_JOINT_LIMITS, self.danger_zone_margin,
+                            )
+                            raw_joints = _limit_joint_velocity(
+                                raw_joints, self._joints[side], dt, self.max_joint_vel,
+                            )
+                            self._joints[side] = raw_joints
+                        except Exception:
+                            logger.warning(
+                                "IK solve failed for %s arm, holding previous joints", side,
+                            )
 
             if trigger_just_released:
                 self._anchor_ctrl_pos[side] = None
@@ -553,12 +752,13 @@ class QuestVRAgent(Agent):
                 self._anchor_ee_wxyz[side] = None
                 self._smoothed_target_wxyz[side] = None
 
-            # Gripper: A/X button closes, B/Y button opens
-            a_pressed = buttons.get("aButton", False)
+            # Gripper: grip/squeeze button closes, release opens.
+            # B/Y also opens as a manual override.
+            grip_pressed = bool(buttons.get("squeeze", False) or buttons.get("grip", False))
             b_pressed = buttons.get("bButton", False)
-            if a_pressed:
+            if grip_pressed:
                 self._gripper[side] = _GRIPPER_CLOSED
-            elif b_pressed:
+            elif b_pressed or not grip_pressed:
                 self._gripper[side] = _GRIPPER_OPEN
 
             action[side] = {
@@ -568,22 +768,33 @@ class QuestVRAgent(Agent):
                 ]).astype(np.float32),
             }
 
-        # Stream camera frame to the Quest headset (throttled)
-        if self._stream_camera:
-            now_stream = time.time()
-            if now_stream - self._last_stream_time >= self._stream_interval:
-                rgb_dict = obs_get_rgb(obs)
-                if rgb_dict:
-                    if self._camera_key and self._camera_key in rgb_dict:
-                        frame = rgb_dict[self._camera_key]
-                    else:
-                        frame = next(iter(rgb_dict.values()))
-                    with self._lock:
-                        self._camera_frame = frame
-                    self._last_stream_time = now_stream
+        self._stream_camera_frame(obs)
+        return self._maybe_combine_bimanual(action)
 
-        # In combined mode, merge left+right into a single 14-DOF vector
-        # under one robot key (for YamPickRedCubeSimRobot with right_arm_only=False)
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
+
+    def _stream_camera_frame(self, obs: Dict[str, Any]) -> None:
+        """Stream camera frame to the Quest headset (throttled)."""
+        if not self._stream_camera:
+            return
+        now_stream = time.time()
+        if now_stream - self._last_stream_time >= self._stream_interval:
+            rgb_dict = obs_get_rgb(obs)
+            if rgb_dict:
+                if self._camera_key and self._camera_key in rgb_dict:
+                    frame = rgb_dict[self._camera_key]
+                else:
+                    frame = next(iter(rgb_dict.values()))
+                with self._lock:
+                    self._camera_frame = frame
+                self._last_stream_time = now_stream
+
+    def _maybe_combine_bimanual(
+        self, action: Dict[str, Dict[str, np.ndarray]],
+    ) -> Dict[str, Dict[str, np.ndarray]]:
+        """Merge left+right into a single 14-DOF vector if in combined mode."""
         if self.bimanual and self.bimanual_combined_key is not None:
             left_pos = action.get("left", {}).get("pos", np.zeros(7, dtype=np.float32))
             right_pos = action.get("right", {}).get("pos", np.zeros(7, dtype=np.float32))
@@ -592,7 +803,6 @@ class QuestVRAgent(Agent):
                     "pos": np.concatenate([left_pos, right_pos]),
                 }
             }
-
         return action
 
     @remote(serialization_needed=True)
