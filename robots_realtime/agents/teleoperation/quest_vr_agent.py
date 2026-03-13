@@ -102,9 +102,11 @@ def _webxr_mat_to_robot_quat(mat16: List[float]) -> np.ndarray:
 
     m = np.array(mat16, dtype=np.float64).reshape(4, 4, order="F")
     rot_webxr = m[:3, :3].copy()
-    # Orientation frame: maps controller axes to EE-compatible axes.
-    # WebXR Z → Robot X, WebXR X → Robot Y, WebXR Y → Robot Z
-    ori_frame = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
+    # Frame matrix must match the position mapping _webxr_to_robot_pos:
+    #   Robot X = -WebXR Z,  Robot Y = -WebXR X,  Robot Z = +WebXR Y
+    # Using the same signs ensures orientation rotations are consistent
+    # with position translations (no pitch/yaw inversion).
+    ori_frame = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=np.float64)
     rot_robot = ori_frame @ rot_webxr @ ori_frame.T
     quat_xyzw = Rotation.from_matrix(rot_robot).as_quat()
     return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
@@ -339,7 +341,7 @@ class QuestVRAgent(Agent):
         # Workspace clamp: max distance (m) from robot base the EE target
         # is allowed to reach.  Prevents impossible IK targets that cause
         # erratic joint solutions.  Set to None to disable.
-        workspace_radius: float = 0.28,
+        workspace_radius: float = 0.42,
         # Home position (6 joint angles); None → all zeros
         home_joints: Optional[List[float]] = None,
         # Velocity used when returning to home (rad/s) — slower than teleop
@@ -710,7 +712,8 @@ class QuestVRAgent(Agent):
                                 _quat_conj_wxyz(self._anchor_ctrl_wxyz[side]),
                             )
                             delta_q = np.array(delta_q)
-                            delta_q[2] = -delta_q[2]
+                            # No axis flipping — let the frame conversion
+                            # in _webxr_mat_to_robot_quat handle all signs.
                             target_wxyz = _quat_mul_wxyz(delta_q, self._anchor_ee_wxyz[side])
                             target_wxyz /= np.linalg.norm(target_wxyz)
 
@@ -721,6 +724,11 @@ class QuestVRAgent(Agent):
                                 self.smoothing_alpha,
                             )
                             ik_wxyz = self._smoothed_target_wxyz[side]
+
+                            if self._debug_mapping and self._debug_counter % 50 == 0:
+                                _, ee_wxyz_now = self._compute_ee_pose(self._joints[side])
+                                print(f"  Target ori (wxyz): {np.round(ik_wxyz, 3)}", flush=True)
+                                print(f"  Actual ori (wxyz): {np.round(ee_wxyz_now, 3)}", flush=True)
 
                         try:
                             raw_joints = np.array(_solve_ik_teleop(

@@ -39,20 +39,20 @@ agent:
   _target_: robots_realtime.agents.teleoperation.quest_vr_agent.QuestVRAgent
   bimanual: false
   vuer_port: 8012
-  position_scale: 0.4
+  position_scale: 0.5
   smoothing_omega: 8.0
   smoothing_alpha: 0.4
   max_joint_vel: 0.5
   danger_zone_margin: 0.05
-  workspace_radius: 0.28
+  workspace_radius: 0.50
   debug_mapping: true
   deadzone_m: 0.004
   track_orientation: true
   # IK weights: higher ori_weight makes wrist rotation more responsive,
   # lower rest_weight allows full arm extension
   ik_pos_weight: 50.0
-  ik_ori_weight: 20.0
-  ik_rest_weight: 0.1
+  ik_ori_weight: 10.0
+  ik_rest_weight: 0.05
   # Home position reset (A/X button) — velocity for smooth return
   # home_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
   home_vel: 0.8

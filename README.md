@@ -48,9 +48,9 @@ or for robotiq gripper instead of default panda grippers (ensure flange orientat
 uv run robots_realtime/envs/launch.py --config_path configs/franka/franka_robotiq_viser.yaml
 ```
 
-## Quest VR Teleoperation (MuJoCo Simulation)
+## Quest VR Teleoperation
 
-Teleoperate bimanual I2RT YAM arms in a MuJoCo simulation using Meta Quest 3 / 3S controllers. The simulation camera feed is streamed live into the Quest headset via WebXR.
+Teleoperate I2RT YAM arms using Meta Quest 3 / 3S controllers via WebXR. Works with both real hardware and MuJoCo simulation. The camera feed (sim or real) can be streamed live into the Quest headset.
 
 ### Prerequisites
 
@@ -58,6 +58,7 @@ Teleoperate bimanual I2RT YAM arms in a MuJoCo simulation using Meta Quest 3 / 3
 - Meta Quest 3 or 3S headset
 - USB-C cable connecting the Quest to the workstation
 - ADB installed (`sudo apt install adb`)
+- For real hardware: CAN interfaces configured for your YAM arm(s) (see [I2RT repo](https://github.com/i2rt-robotics/i2rt))
 
 ### 1. Install dependencies
 
@@ -82,19 +83,37 @@ Forward the Vuer WebXR port so the Quest browser can reach your workstation:
 adb reverse tcp:8012 tcp:8012
 ```
 
-### 3. Launch the MuJoCo simulation on your workstation
+### 3. Launch
+
+#### MuJoCo Simulation (no hardware needed)
 
 ```bash
+# Bimanual — two arms + red cube pick task
 uv run python robots_realtime/envs/launch.py \
     --config-path configs/yam/yam_quest_pick_red_cube_sim.yaml
+
+# Single arm — plain MuJoCo sim
+uv run python robots_realtime/envs/launch.py \
+    --config-path configs/yam/yam_quest_mujoco_sim.yaml
 ```
 
-This starts:
-- The MuJoCo physics simulation with a bimanual YAM station and a red cube
-- The Vuer WebXR server on port 8012
-- Camera streaming from the simulation's top camera
+#### Real I2RT YAM Hardware
 
-You should see the MuJoCo viewer window open on your workstation showing both arms and the red cube on the table.
+Make sure your CAN interfaces are up and the arm(s) are powered on before launching.
+
+```bash
+# Single arm (left)
+uv run python robots_realtime/envs/launch.py \
+    --config-path configs/yam/yam_quest_single_arm.yaml
+
+# Bimanual (left + right)
+uv run python robots_realtime/envs/launch.py \
+    --config-path configs/yam/yam_quest_bimanual.yaml
+```
+
+> **Safety note (real hardware):** The real hardware configs default to `max_joint_vel: 0.3` rad/s (lower than sim) for safer operation. Increase gradually once you're comfortable with the mapping. You can also enable `effort_limit` in the config for collision detection — uncomment and set an appropriate threshold for your setup.
+
+To stream a real camera to the Quest headset, uncomment the `sensors.cameras` section and the `stream_camera` / `camera_key` lines in the config. Set `device_path` to your camera device (e.g., `/dev/video4`).
 
 ### 4. Open the VR scene on the Quest headset
 
@@ -106,7 +125,7 @@ https://vuer.ai/?ws=ws://localhost:8012
 
 > The `adb reverse` tunnel makes `localhost:8012` on the Quest reach your workstation directly over USB. No ngrok or HTTPS tunnel is needed.
 
-When the page loads you will see the Vuer WebXR scene with a blue grid floor and the simulation camera feed streaming in the background.
+When the page loads you will see the Vuer WebXR scene with a blue grid floor and (if camera streaming is enabled) the camera feed in the background.
 
 ### 5. Enter VR and start teleoperating
 
@@ -114,7 +133,7 @@ When the page loads you will see the Vuer WebXR scene with a blue grid floor and
 2. If prompted, enable **Passthrough** so you can see your physical surroundings overlaid with the VR scene.
 3. Pick up your Quest controllers:
    - **Left controller** drives the **left arm**
-   - **Right controller** drives the **right arm**
+   - **Right controller** drives the **right arm** (bimanual only)
 4. **Squeeze the trigger** and move your hand — the robot arm follows.
 
 ### Controls
@@ -123,34 +142,42 @@ When the page loads you will see the Vuer WebXR scene with a blue grid floor and
 |---|---|
 | **Move arm** | Hold **trigger** and move your hand (position is relative to where you first squeezed) |
 | **Release / re-anchor** | Release trigger, reposition your hand, squeeze again to resume |
-| **Close gripper** | Press **A** (right) or **X** (left) |
-| **Open gripper** | Press **B** (right) or **Y** (left) |
+| **Close gripper** | Squeeze **grip** button |
+| **Open gripper** | Release grip, or press **B** (right) / **Y** (left) |
+| **Reset to home** | Press **A** (right) or **X** (left) — resets ALL arms |
 | **Wrist orientation** | While holding trigger, tilt/rotate your wrist — the gripper follows your roll, pitch, and yaw |
 
 ### Tips
 
 - **Clutching:** Release the trigger to "pick up" your hand and reposition without moving the robot. Squeeze again to resume from the arm's current position.
 - **Smooth motion:** The system uses a critically-damped trajectory filter — move your hand at a natural pace.
-- **Reach:** Position scale is 1:1 by default. Your full arm reach maps to the robot's full workspace.
+- **Reach:** `position_scale` controls hand-to-robot movement ratio. Default is `0.5` — increase for larger reach, decrease for finer control.
 - **Tracking quality:** Keep controllers in front of you, roughly chest-to-waist height, for the best Quest tracking.
+- **Real hardware first run:** Start with `debug_mapping: true` in the config so you can verify the coordinate mapping in the terminal before committing to large motions.
 
 ### Available configs
 
-| Config | Description |
-|---|---|
-| `yam_quest_pick_red_cube_sim.yaml` | Bimanual YAM arms + red cube pick task (camera streaming on) |
-| `yam_quest_mujoco_sim.yaml` | Single YAM arm in plain MuJoCo sim (camera streaming on) |
+| Config | Mode | Description |
+|---|---|---|
+| `yam_quest_single_arm.yaml` | Real hardware | Single YAM arm with Quest VR |
+| `yam_quest_bimanual.yaml` | Real hardware | Bimanual YAM arms with Quest VR |
+| `yam_quest_pick_red_cube_sim.yaml` | Simulation | Bimanual YAM + red cube pick task (camera streaming on) |
+| `yam_quest_mujoco_sim.yaml` | Simulation | Single YAM arm in plain MuJoCo sim (camera streaming on) |
 
 ### Tunable parameters (in YAML config under `agent:`)
 
 | Parameter | Default | Description |
 |---|---|---|
-| `position_scale` | `1.0` | Multiplier on hand-to-robot movement. Increase for larger reach, decrease for finer control |
-| `smoothing_omega` | `12.0` | Trajectory filter speed. Higher = more responsive but less smooth |
-| `smoothing_alpha` | `0.3` | Orientation smoothing (0 = frozen, 1 = instant) |
-| `max_joint_vel` | `2.0` | Max joint velocity in rad/s |
-| `deadzone_m` | `0.002` | Hand tremor rejection threshold in meters |
+| `position_scale` | `0.5` | Multiplier on hand-to-robot movement. Increase for larger reach, decrease for finer control |
+| `smoothing_omega` | `8.0` | Trajectory filter speed. Higher = more responsive but less smooth |
+| `smoothing_alpha` | `0.4` | Orientation smoothing (0 = frozen, 1 = instant) |
+| `max_joint_vel` | `0.3` (real) / `0.5` (sim) | Max joint velocity in rad/s |
+| `danger_zone_margin` | `0.05` | Radians to stay away from hard joint limits |
+| `deadzone_m` | `0.004` | Hand tremor rejection threshold in meters |
 | `track_orientation` | `true` | Map controller roll/pitch/yaw to gripper orientation |
+| `workspace_radius` | `0.42` | Max EE distance from robot base (meters) |
+| `effort_limit` | disabled | Motor effort threshold for collision detection (enable for real hardware) |
+| `stream_camera` | `false` (real) / `true` (sim) | Stream camera feed to Quest headset |
 | `stream_fps` | `30.0` | Camera stream framerate to Quest headset |
 
 ## Extending with Custom Agents

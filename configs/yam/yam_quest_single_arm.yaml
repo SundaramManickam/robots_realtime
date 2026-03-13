@@ -1,0 +1,65 @@
+# YAM single arm controlled by Quest 3 / 3S VR controllers (REAL HARDWARE).
+#
+# No physical leader device required. Control the arm by moving the
+# Quest controller in space (hold trigger to engage).
+#
+# ── Prerequisites ──────────────────────────────────────────────────────
+#
+#   1. Install the quest_vr optional dependency:
+#        source .venv/bin/activate && uv pip install vuer
+#
+#   2. Set up CAN interface for the YAM arm (see I2RT repo docs).
+#
+#   3. Connect Quest via USB and forward the Vuer port:
+#        adb devices
+#        adb reverse tcp:8012 tcp:8012
+#
+# ── Usage ──────────────────────────────────────────────────────────────
+#
+#   uv run python robots_realtime/envs/launch.py \
+#       --config-path configs/yam/yam_quest_single_arm.yaml
+#
+
+_target_: robots_realtime.envs.launch.LaunchConfig
+hz: 30.0
+
+# Uncomment to stream a camera feed to the Quest headset:
+# sensors:
+#   cameras:
+#     top_camera:
+#         _target_: robots_realtime.sensors.cameras.camera.CameraNode
+#         camera:
+#             _target_: robots_realtime.sensors.cameras.opencv_camera.OpencvCamera
+#             device_path: "/dev/video4"
+#             camera_type: "realsense_camera"
+
+robots:
+  left: ["robot_configs/yam/left.yaml"]
+
+agent:
+  _target_: robots_realtime.agents.teleoperation.quest_vr_agent.QuestVRAgent
+  bimanual: false
+  vuer_port: 8012
+  position_scale: 0.5
+  smoothing_omega: 8.0
+  smoothing_alpha: 0.4
+  max_joint_vel: 0.3
+  danger_zone_margin: 0.05
+  workspace_radius: 0.42
+  debug_mapping: true
+  deadzone_m: 0.004
+  track_orientation: true
+  ik_pos_weight: 50.0
+  ik_ori_weight: 10.0
+  ik_rest_weight: 0.05
+  home_vel: 0.8
+  # Effort-based collision detection — set a limit appropriate for your setup
+  # effort_limit: 5.0
+  # Camera streaming (uncomment if sensors.cameras is configured above)
+  # stream_camera: true
+  # camera_key: "top_camera"
+  # stream_fps: 30.0
+  # stream_quality: 80
+
+station_metadata:
+  world_frame: "left_arm" # front x, left y, up z

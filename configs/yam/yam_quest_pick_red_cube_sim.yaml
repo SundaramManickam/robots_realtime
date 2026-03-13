@@ -38,17 +38,17 @@ agent:
   bimanual: true
   bimanual_combined_key: "bimanual"
   vuer_port: 8012
-  position_scale: 0.4
+  position_scale: 0.5
   smoothing_omega: 8.0
   smoothing_alpha: 0.4
   max_joint_vel: 0.5
   danger_zone_margin: 0.05
-  workspace_radius: 0.28
+  workspace_radius: 0.50
   deadzone_m: 0.004
   track_orientation: true
   ik_pos_weight: 50.0
-  ik_ori_weight: 20.0
-  ik_rest_weight: 0.1
+  ik_ori_weight: 10.0
+  ik_rest_weight: 0.05
   home_vel: 0.8
   debug_mapping: true
   # effort_limit: 5.0

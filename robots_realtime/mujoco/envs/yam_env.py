@@ -351,30 +351,59 @@ class YamEnvCabinateMug(YamEnv):
 
 class YamEnvPickRedCube(YamEnv):
     def _add_others(self, station_spec):
-        # Add a red cube to the station
-        size = 0.025
-        cube_spawn_site = station_spec.worldbody.add_site(pos=[0.6, -0.3, 0.753 + size])
-        cube_spec = mujoco.MjSpec()
-        body = cube_spec.worldbody.add_body(name="cube_body")
-        body.add_geom(
-            name="red_box",
-            type=mujoco.mjtGeom.mjGEOM_BOX,
-            size=[size, size, size],
-            rgba=[1, 0, 0, 1],
-        )
-        cube_body = cube_spawn_site.attach_body(cube_spec.worldbody, "cube_", "")
-        self.cup_freejoint_name = "cup_joint"
-        cube_body.add_freejoint(name=self.cup_freejoint_name)
+        size = 0.01875
+        table_z = 0.753
 
-        # add a floating transparent light green region as the goal region
-        worldbody = station_spec.worldbody  # .add_site(pos=[0.6, -0.3, 0.753 + size / 2])
+        # 4 red cubes on the right side, spaced apart
+        cube_positions = [
+            [0.45, -0.25, table_z + size],
+            [0.55, -0.20, table_z + size],
+            [0.45, -0.35, table_z + size],
+            [0.55, -0.35, table_z + size],
+        ]
+        self.cube_freejoint_names = []
+        for i, pos in enumerate(cube_positions):
+            site = station_spec.worldbody.add_site(pos=pos)
+            spec = mujoco.MjSpec()
+            body = spec.worldbody.add_body(name=f"cube_body_{i}")
+            body.add_geom(
+                name=f"red_box_{i}",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[size, size, size],
+                rgba=[1, 0, 0, 1],
+                density=100,
+            )
+            cb = site.attach_body(spec.worldbody, f"cube{i}_", "")
+            joint_name = f"cube{i}_joint"
+            cb.add_freejoint(name=joint_name)
+            self.cube_freejoint_names.append(joint_name)
+
+        # Keep backward compat for reset() which references cup_freejoint_name
+        self.cup_freejoint_name = self.cube_freejoint_names[0]
+
+        # Small plate in the center between both arms
+        plate_pos = [0.45, 0.0, table_z + 0.005]
+        plate_site = station_spec.worldbody.add_site(pos=plate_pos)
+        plate_spec = mujoco.MjSpec()
+        plate_body = plate_spec.worldbody.add_body(name="plate_body")
+        plate_body.add_geom(
+            name="plate",
+            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+            size=[0.08, 0.005],  # radius=8cm, height=5mm
+            rgba=[0.85, 0.85, 0.85, 1],
+            density=200,
+        )
+        plate_site.attach_body(plate_spec.worldbody, "plate_", "")
+
+        # Floating transparent goal region
+        worldbody = station_spec.worldbody
         worldbody.add_geom(
-            pos=[0.6, -0.3, 0.753 + 0.3],
+            pos=[0.6, -0.3, table_z + 0.3],
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=[0.25, 0.25, 0.1],
             rgba=[0.5, 1, 0.5, 0.05],
-            contype=0,  # no collision with the robot
-            conaffinity=0,  # no collision with the robot
+            contype=0,
+            conaffinity=0,
             group=2,
             mass=0,
         )
